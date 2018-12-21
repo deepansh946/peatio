@@ -1,0 +1,102 @@
+kind: pipeline
+name: default
+
+services:
+- name: database
+  image: mysql:5.7
+  ports:
+    - 3306
+  environment:
+    MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+
+- name: rabbitmq
+  image: rabbitmq:3.7.6-management
+  ports:
+    - 5672
+
+- name: redis
+  image: redis:4.0
+  ports:
+    - 6379
+
+steps:
+# Copy bundler cache from the host machine to your build environment.
+# Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
+- name: restore-cache
+  pull: default
+  image: drillster/drone-volume-cache
+  settings:
+    restore: true
+    mount:
+    - vendor/bundle
+  volumes:
+  - name: bundle-cache
+    path: /cache
+
+# Wait mysql to be ready for taking connections.
+- name: ping-mysql
+  image: mysql:5.7
+  environment:
+    DATABASE_HOST: database
+  commands:
+    - while ! mysqladmin ping -h$DATABASE_HOST -uroot --silent; do
+    - sleep 2
+    - done
+
+# Initialize application. Install dependencies. Migrate database. Run rspec.
+- name: run-rspec
+  image: ruby:2.5.3
+  environment:
+    DATABASE_HOST: database
+    RABBITMQ_HOST: rabbitmq
+    EVENT_API_RABBITMQ_HOST: rabbitmq
+    REDIS_URL: redis://redis:6379
+    RAILS_ENV: test
+  commands:
+    - ./bin/init_config
+    - bundle install --deployment --without production development --jobs=$(nproc) --retry=3
+    - bundle exec rake db:create db:migrate
+    - LOG_LEVEL=warn bundle exec rspec
+
+# Copy bundler cache from the build environment to your host machine.
+# Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
+- name: rebuild-cache
+  pull: default
+  image: drillster/drone-volume-cache
+  settings:
+    rebuild: true
+    mount:
+    - vendor/bundle
+  volumes:
+  - name: bundle-cache
+    path: /cache
+
+- name: show-vendor
+  image: ruby:2.5.3
+  environment:
+    DATABASE_HOST: database
+    RABBITMQ_HOST: rabbitmq
+    EVENT_API_RABBITMQ_HOST: rabbitmq
+    REDIS_URL: redis://redis:6379
+    RAILS_ENV: test
+  commands:
+    - ls -R vendor/bundle
+
+- name: docker-build-and-push
+  image: plugins/docker
+  settings:
+    username:
+      from_secret: docker_username
+    password:
+      from_secret: docker_password
+    repo: syaroslav/peatio
+  when:
+    event:
+    - push
+    branch:
+    - drone
+
+volumes:
+- name: bundle-cache
+  host:
+    path: /tmp
