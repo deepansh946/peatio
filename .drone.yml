@@ -22,7 +22,7 @@ services:
 steps:
 # Copy bundler cache from the host machine to your build environment.
 # Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
-- name: restore-cache
+- name: restore-bundler-cache
   pull: default
   image: drillster/drone-volume-cache
   settings:
@@ -30,37 +30,58 @@ steps:
     mount:
     - vendor/bundle
   volumes:
-  - name: bundle-cache
+  - name: bundler-cache
     path: /cache
+  when:
+    event:
+    - push
 
-# Wait mysql to be ready for taking connections.
-- name: ping-mysql
-  image: mysql:5.7
-  environment:
-    DATABASE_HOST: database
-  commands:
-    - while ! mysqladmin ping -h$DATABASE_HOST -uroot --silent; do
-    - sleep 2
-    - done
+# Copy docker cache from the host machine to your build environment.
+# Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
+# - name: restore-docker-cache
+#   pull: default
+#   image: drillster/drone-volume-cache
+#   settings:
+#     restore: true
+#     mount:
+#     - /var/lib/docker
+#   volumes:
+#   - name: docker-cache
+#     path: /cache
+#   when:
+#     event:
+#     - push
+
+# Wait MySQL to be ready for taking connections.
+# - name: wait-for-mysql
+#   image: jwilder/dockerize
+#   commands:
+#   - dockerize -wait tcp://database:3306 -timeout 1m
+#   when:
+#     event:
+#     - push
 
 # Initialize application. Install dependencies. Migrate database. Run rspec.
-- name: run-rspec
-  image: ruby:2.5.3
-  environment:
-    DATABASE_HOST: database
-    RABBITMQ_HOST: rabbitmq
-    EVENT_API_RABBITMQ_HOST: rabbitmq
-    REDIS_URL: redis://redis:6379
-    RAILS_ENV: test
-  commands:
-    - ./bin/init_config
-    - bundle install --deployment --without production development --jobs=$(nproc) --retry=3
-    - bundle exec rake db:create db:migrate
-    - LOG_LEVEL=warn bundle exec rspec
+# - name: run-rspec
+#   image: ruby:2.5.3
+#   environment:
+#     DATABASE_HOST: database
+#     RABBITMQ_HOST: rabbitmq
+#     EVENT_API_RABBITMQ_HOST: rabbitmq
+#     REDIS_URL: redis://redis:6379
+#     RAILS_ENV: test
+#   commands:
+#   - ./bin/init_config
+#   - bundle install --deployment --without production development --jobs=$(nproc) --retry=3
+#   - bundle exec rake db:create db:migrate
+#   - LOG_LEVEL=warn bundle exec rspec
+#   when:
+#     event:
+#     - push
 
 # Copy bundler cache from the build environment to your host machine.
 # Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
-- name: rebuild-cache
+- name: rebuild-bundler-cache
   pull: default
   image: drillster/drone-volume-cache
   settings:
@@ -68,20 +89,35 @@ steps:
     mount:
     - vendor/bundle
   volumes:
-  - name: bundle-cache
+  - name: bundler-cache
     path: /cache
+  when:
+    event:
+    - push
 
-- name: show-vendor
+# Update application version, markdown and swagger documentation, then push it to git repository.
+- name: git-tag-and-push
   image: ruby:2.5.3
   environment:
-    DATABASE_HOST: database
-    RABBITMQ_HOST: rabbitmq
-    EVENT_API_RABBITMQ_HOST: rabbitmq
-    REDIS_URL: redis://redis:6379
-    RAILS_ENV: test
+    GITHUB_API_KEY:
+      from_secret: GITHUB_API_KEY
   commands:
-    - ls -R vendor/bundle
+  - ./bin/init_config
+  - curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.34.0/install.sh | bash
+  - . $HOME/.nvm/nvm.sh
+  - nvm install 8 && nvm use 8
+  - npm i -g yarn
+  - bundle install --deployment --without production development --jobs=$(nproc) --retry=3
+  - bundle exec rake release:drone
+  - echo "latest,$DRONE_BRANCH,$(git describe --tags --abbrev=0)" > .tags
+  - cat .tags
+  when:
+    event:
+    - push
+    branch:
+    - drone
 
+# Build and push docker image using ".tags" file.
 - name: docker-build-and-push
   image: plugins/docker
   settings:
@@ -89,14 +125,35 @@ steps:
       from_secret: docker_username
     password:
       from_secret: docker_password
-    repo: syaroslav/peatio
+    repo: rubykube/peatio
   when:
     event:
     - push
     branch:
     - drone
 
+# Copy docker cache from the build environment to your host machine.
+# Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
+# - name: rebuild-docker-cache
+#   pull: default
+#   image: drillster/drone-volume-cache
+#   settings:
+#     rebuild: true
+#     mount:
+#     - vendor/bundle
+#   volumes:
+#   - name: bundler-cache
+#     path: /cache
+#   when:
+#     event:
+#     - push
+#     branch:
+#    - drone
+
 volumes:
-- name: bundle-cache
+- name: bundler-cache
   host:
     path: /tmp
+# - name: docker-cache
+#   host:
+#     path: /tmp
