@@ -38,28 +38,25 @@ steps:
 
 # Copy docker cache from the host machine to your build environment.
 # Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
-# - name: restore-docker-cache
-#   pull: default
-#   image: drillster/drone-volume-cache
-#   settings:
-#     restore: true
-#     mount:
-#     - /var/lib/docker
-#   volumes:
-#   - name: docker-cache
-#     path: /cache
-#   when:
-#     event:
-#     - push
+- name: restore-docker-cache
+  pull: default
+  image: drillster/drone-volume-cache
+  settings:
+    restore: true
+    mount:
+    - /drone/docker
+  when:
+    event:
+    - push
 
 # Wait MySQL to be ready for taking connections.
-# - name: wait-for-mysql
-#   image: jwilder/dockerize
-#   commands:
-#   - dockerize -wait tcp://database:3306 -timeout 1m
-#   when:
-#     event:
-#     - push
+- name: wait-for-mysql
+  image: jwilder/dockerize
+  commands:
+  - dockerize -wait tcp://database:3306 -timeout 1m
+  when:
+    event:
+    - push
 
 # Initialize application. Install dependencies. Migrate database. Run rspec.
 # - name: run-rspec
@@ -102,15 +99,18 @@ steps:
     GITHUB_API_KEY:
       from_secret: GITHUB_API_KEY
   commands:
-  - ./bin/init_config
   - curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.34.0/install.sh | bash
+  - gem install bundler -v 1.17.3
   - . $HOME/.nvm/nvm.sh
   - nvm install 8 && nvm use 8
   - npm i -g yarn
+  - ./bin/init_config
   - bundle install --deployment --without production development --jobs=$(nproc) --retry=3
+  - bundle exec rake yarn:install
+  - ./bin/install_plugins
+  - bundle exec rake db:create db:migrate
   - bundle exec rake release:drone
   - echo "latest,$DRONE_BRANCH,$(git describe --tags --abbrev=0)" > .tags
-  - cat .tags
   when:
     event:
     - push
@@ -126,6 +126,8 @@ steps:
     password:
       from_secret: docker_password
     repo: rubykube/peatio
+    storage_path: /drone/docker
+    use_cache: true
   when:
     event:
     - push
@@ -134,21 +136,18 @@ steps:
 
 # Copy docker cache from the build environment to your host machine.
 # Plugin description: http://plugins.drone.io/drillster/drone-volume-cache
-# - name: rebuild-docker-cache
-#   pull: default
-#   image: drillster/drone-volume-cache
-#   settings:
-#     rebuild: true
-#     mount:
-#     - vendor/bundle
-#   volumes:
-#   - name: bundler-cache
-#     path: /cache
-#   when:
-#     event:
-#     - push
-#     branch:
-#    - drone
+- name: rebuild-docker-cache
+  pull: default
+  image: drillster/drone-volume-cache
+  settings:
+    rebuild: true
+    mount:
+    - /drone/docker
+  when:
+    event:
+    - push
+    branch:
+    - drone
 
 volumes:
 - name: bundler-cache

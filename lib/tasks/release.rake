@@ -30,9 +30,9 @@ namespace 'release' do
     sh %(git remote add authenticated-origin https://#{bot_username}:#{ENV.fetch('GITHUB_API_KEY')}@github.com/#{repository_slug})
     next_version = Bump::Bump.send(:next_version, Bump::Bump.current, 'patch')
     # sh %(V='#{next_version}' bin/gendocs)
-    # sh %(git add -A)
+    sh %(git add -A)
     Bump::Bump.run('patch', commit_message: '[ci skip]', tag: false)
     sh %(git tag #{Bump::Bump.current})
-    # sh %(git push --tags authenticated-origin HEAD:#{ENV.fetch('DRONE_BRANCH')})
+    sh %(git push --tags authenticated-origin HEAD:#{ENV.fetch('DRONE_BRANCH')})
   end
 end
